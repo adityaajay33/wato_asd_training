@@ -2,10 +2,11 @@
 #define COSTMAP_CORE_HPP_
 
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/laser_scan.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
+#include "geometry_msgs/msg/pose.hpp"
 #include <vector>
-#include <cmath>
+#include <memory>
 
 namespace robot
 {
@@ -14,25 +15,30 @@ class CostmapCore {
   public:
     explicit CostmapCore(const rclcpp::Logger& logger);
 
-    void initializeCostmap(int width, int height, double resolution);
+    void initializeCostmap(double resolution, int width, int height, const geometry_msgs::msg::Pose& origin, double inflation_radius);
 
-    void convertToGrid(double range, double angle, int &x_grid, int &y_grid);
+    void updateWithLaserScan(const sensor_msgs::msg::LaserScan::SharedPtr& scan);
 
-    void markObstacle(int x_grid, int y_grid);
+    nav_msgs::msg::OccupancyGrid::SharedPtr getCostmap() const;
 
-    void inflateObstacles(double inflation_radius, int max_cost);
-
-    void publishCostmap(const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr &publisher);
+    void inflateRegion(int x, int y);
 
   private:
     rclcpp::Logger logger_;
-    std::vector<std::vector<int>> costmap_;
+    nav_msgs::msg::OccupancyGrid::SharedPtr costmap_;
+    double resolution_;
     int width_;
     int height_;
-    double resolution_;
-    double origin_x_;
-    double origin_y_;
+    geometry_msgs::msg::Pose origin_;
+    double inflation_radius_;
+    int inflation_cells_;
 
-    bool isValidGridCoordinate(int x, int y);
+    bool isWithinBounds(int x, int y) const;
+
+    void convertToGrid(double range, double angle, int& x, int& y) const;
+    void markCell(int x, int y);
 };
-};
+
+} // namespace robot
+
+#endif

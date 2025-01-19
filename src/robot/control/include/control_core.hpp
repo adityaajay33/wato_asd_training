@@ -1,20 +1,31 @@
 #ifndef CONTROL_CORE_HPP_
 #define CONTROL_CORE_HPP_
 
-#include "rclcpp/rclcpp.hpp"
+#include <nav_msgs/msg/path.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <optional>
+#include <cmath>
 
-namespace robot
-{
+namespace robot {
+class PurePursuitCore {
+public:
+    PurePursuitCore(double lookahead_distance, double goal_tolerance, double linear_speed);
 
-class ControlCore {
-  public:
-    // Constructor, we pass in the node's RCLCPP logger to enable logging to terminal
-    ControlCore(const rclcpp::Logger& logger);
-  
-  private:
-    rclcpp::Logger logger_;
+    std::optional<geometry_msgs::msg::PoseStamped> findLookaheadPoint(
+        const nav_msgs::msg::Path &path, const geometry_msgs::msg::Pose &robot_pose);
+
+    geometry_msgs::msg::Twist computeVelocity(
+        const geometry_msgs::msg::PoseStamped &target, const geometry_msgs::msg::Pose &robot_pose);
+
+private:
+    double computeDistance(const geometry_msgs::msg::Point &a, const geometry_msgs::msg::Point &b);
+    double extractYaw(const geometry_msgs::msg::Quaternion &quat);
+
+    double lookahead_distance_;
+    double goal_tolerance_;
+    double linear_speed_;
 };
-
-} 
-
-#endif 
+}
+#endif
