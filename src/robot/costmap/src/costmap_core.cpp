@@ -39,3 +39,5 @@ voice CostmapCore::markObstacle(int x, int y){
         costmap_[y*size_x_ + x] = 100;
     }
 }
+
+}
