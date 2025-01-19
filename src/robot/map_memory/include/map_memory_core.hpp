@@ -3,29 +3,30 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
+#include "geometry_msgs/msg/pose.hpp"
 #include <cmath>
+#include <vector>
 
-namespace robot
-{
+namespace robot {
 
 class MapMemoryCore {
   public:
     explicit MapMemoryCore(const rclcpp::Logger& logger);
 
-    void initializeGlobalMap(int width, int height, double resolution);
-    void mergeCostmap(cont nav_msgs::msg::OccupancyGrid &costmap, double robot_x, double robot_y);
+    void initMapMemory(double resolution, int width, int height, geometry_msgs::msg::Pose origin);
+    void updateMap(nav_msgs::msg::OccupancyGrid::SharedPtr local_costmap, double robot_x, double robot_y, double robot_theta);
+    bool robotToMap(double rx, double ry, int &mx, int &my);
 
-    const nav_msgs::msg::OccupancyGrid &getGlobalMap() const;
+    nav_msgs::msg::OccupancyGrid::SharedPtr getMapData() const;
 
   private:
     rclcpp::Logger logger_;
+    nav_msgs::msg::OccupancyGrid::SharedPtr global_map_;
 
-    nav_msgs::msg::OccupancyGrid global_map_;
-    
-    int worldToGridIndex(double world_x, double world_y) const;
     void updateGlobalMapCell(int x, int y, int cost);
+    int worldToGridIndex(double world_x, double world_y) const;
 };
 
-}  
+}  // namespace robot
 
-#endif  
+#endif

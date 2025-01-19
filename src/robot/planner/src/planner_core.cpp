@@ -1,13 +1,13 @@
 #include "planner_core.hpp"
 
-PlannerCore::PlannerCore() {}
+PlannerCore::PlannerCore(const rclcpp::Logger& logger)
+    : logger_(logger), path_(std::make_shared<nav_msgs::msg::Path>()) {}
 
 nav_msgs::msg::Path PlannerCore::computePath(const nav_msgs::msg::OccupancyGrid &map,
                                              const geometry_msgs::msg::Pose &start,
                                              const geometry_msgs::msg::PointStamped &goal) {
-    nav_msgs::msg::Path path;
-    path.header.stamp = rclcpp::Clock().now();
-    path.header.frame_id = "map";
+    path_->header.stamp = rclcpp::Clock().now();
+    path_->header.frame_id = "map";
 
     std::priority_queue<AStarNode, std::vector<AStarNode>, CompareF> open_list;
     std::unordered_map<CellIndex, double, CellIndexHash> g_score;
@@ -24,16 +24,8 @@ nav_msgs::msg::Path PlannerCore::computePath(const nav_msgs::msg::OccupancyGrid 
         open_list.pop();
 
         if (current.index == goal_idx) {
-            CellIndex temp = current.index;
-            while (came_from.find(temp) != came_from.end()) {
-                geometry_msgs::msg::PoseStamped pose;
-                pose.pose.position.x = temp.x * map.info.resolution + map.info.origin.position.x;
-                pose.pose.position.y = temp.y * map.info.resolution + map.info.origin.position.y;
-                path.poses.push_back(pose);
-                temp = came_from[temp];
-            }
-            std::reverse(path.poses.begin(), path.poses.end());
-            return path;
+            reconstructPath(came_from, current.index, *path_);
+            return *path_;
         }
 
         for (const auto &neighbor : getNeighbors(current.index, map)) {
@@ -48,7 +40,8 @@ nav_msgs::msg::Path PlannerCore::computePath(const nav_msgs::msg::OccupancyGrid 
         }
     }
 
-    return path;
+    RCLCPP_WARN(logger_, "No path found to the goal.");
+    return *path_;  // Return an empty path
 }
 
 std::vector<CellIndex> PlannerCore::getNeighbors(const CellIndex &index, const nav_msgs::msg::OccupancyGrid &map) {
@@ -82,4 +75,19 @@ CellIndex PlannerCore::worldToGrid(double x, double y, const nav_msgs::msg::Occu
     int grid_x = static_cast<int>((x - map.info.origin.position.x) / map.info.resolution);
     int grid_y = static_cast<int>((y - map.info.origin.position.y) / map.info.resolution);
     return CellIndex(grid_x, grid_y);
+}
+
+void PlannerCore::reconstructPath(const std::unordered_map<CellIndex, CellIndex, CellIndexHash> &came_from,
+                                  const CellIndex &current,
+                                  nav_msgs::msg::Path &path) {
+    path.poses.clear();
+    CellIndex c = current;
+    while (came_from.find(c) != came_from.end()) {
+        geometry_msgs::msg::PoseStamped pose;
+        pose.pose.position.x = c.x * map_->info.resolution + map_->info.origin.position.x;
+        pose.pose.position.y = c.y * map_->info.resolution + map_->info.origin.position.y;
+        path.poses.push_back(pose);
+        c = came_from.at(c);
+    }
+    std::reverse(path.poses.begin(), path.poses.end());
 }

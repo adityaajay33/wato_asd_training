@@ -11,11 +11,11 @@ class ControlNode : public rclcpp::Node {
 public:
     ControlNode();
 
-private:
     void pathCallback(const nav_msgs::msg::Path::SharedPtr msg);
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
     void timerCallback();
 
+private:
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
@@ -28,4 +28,5 @@ private:
 
     bool path_received_ = false;
 };
+
 #endif

@@ -2,21 +2,21 @@
 #define CONTROL_CORE_HPP_
 
 #include <nav_msgs/msg/path.hpp>
-#include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <optional>
 #include <cmath>
 
 namespace robot {
-class PurePursuitCore {
+
+class ControlCore {
 public:
-    PurePursuitCore(double lookahead_distance, double goal_tolerance, double linear_speed);
+    ControlCore(double lookahead_distance, double goal_tolerance, double linear_speed);
 
     std::optional<geometry_msgs::msg::PoseStamped> findLookaheadPoint(
         const nav_msgs::msg::Path &path, const geometry_msgs::msg::Pose &robot_pose);
 
-    geometry_msgs::msg::Twist computeVelocity(
+    geometry_msgs::msg::Twist calculateControlCommand(
         const geometry_msgs::msg::PoseStamped &target, const geometry_msgs::msg::Pose &robot_pose);
 
 private:
@@ -27,5 +27,7 @@ private:
     double goal_tolerance_;
     double linear_speed_;
 };
-}
+
+} 
+
 #endif

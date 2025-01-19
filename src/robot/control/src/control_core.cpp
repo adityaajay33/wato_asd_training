@@ -13,11 +13,11 @@ std::optional<geometry_msgs::msg::PoseStamped> PurePursuitCore::findLookaheadPoi
     for (const auto &pose : path.poses) {
         double distance = computeDistance(robot_pose.position, pose.pose.position);
         if (distance >= lookahead_distance_) {
-            return pose;  // Return the first valid lookahead point
+            return pose;
         }
     }
 
-    return std::nullopt;  // No valid lookahead point found
+    return std::nullopt;
 }
 
 geometry_msgs::msg::Twist PurePursuitCore::computeVelocity(
@@ -33,7 +33,6 @@ geometry_msgs::msg::Twist PurePursuitCore::computeVelocity(
     double target_angle = std::atan2(dy, dx);
     double angle_error = target_angle - robot_yaw;
 
-    // Normalize angle_error to [-π, π]
     while (angle_error > M_PI) {
         angle_error -= 2.0 * M_PI;
     }
@@ -42,7 +41,7 @@ geometry_msgs::msg::Twist PurePursuitCore::computeVelocity(
     }
 
     cmd_vel.linear.x = linear_speed_;
-    cmd_vel.angular.z = 2.0 * angle_error;  // Gain factor for angular velocity
+    cmd_vel.angular.z = 2.0 * angle_error;
 
     return cmd_vel;
 }
@@ -57,4 +56,4 @@ double PurePursuitCore::extractYaw(const geometry_msgs::msg::Quaternion &quat) {
     return std::atan2(siny_cosp, cosy_cosp);
 }
 
-}  // namespace robot
+} // namespace robot

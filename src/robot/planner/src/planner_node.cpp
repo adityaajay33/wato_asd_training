@@ -1,147 +1,155 @@
 #include "planner_node.hpp"
 
-PlannerNode::PlannerNode() : Node("planner_node"), state_(State::WAITING_FOR_GOAL) {
+PlannerNode::PlannerNode() 
+    : Node("planner_node"), 
+      planner_(robot::PlannerCore(this->get_logger())),
+      active_goal_(false),
+      have_odom_(false) {
+    processParameters();
+
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "/map", 10, std::bind(&PlannerNode::mapCallback, this, std::placeholders::_1));
+        map_topic_, 10, std::bind(&PlannerNode::mapCallback, this, std::placeholders::_1));
 
     goal_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
-        "/goal_point", 10, std::bind(&PlannerNode::goalCallback, this, std::placeholders::_1));
+        goal_topic_, 10, std::bind(&PlannerNode::goalCallback, this, std::placeholders::_1));
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/odom/filtered", 10, std::bind(&PlannerNode::odomCallback, this, std::placeholders::_1));
+        odom_topic_, 10, std::bind(&PlannerNode::odomCallback, this, std::placeholders::_1));
 
-    path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/path", 10);
+    path_pub_ = this->create_publisher<nav_msgs::msg::Path>(path_topic_, 10);
 
     timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(500), std::bind(&PlannerNode::timerCallback, this));
+        std::chrono::milliseconds(500),
+        std::bind(&PlannerNode::timerCallback, this));
+
+    planner_.initPlanner(smoothing_factor_, iterations_);
+}
+
+void PlannerNode::processParameters() {
+    this->declare_parameter<std::string>("map_topic", "/map");
+    this->declare_parameter<std::string>("goal_topic", "/goal_pose");
+    this->declare_parameter<std::string>("odom_topic", "/odom/filtered");
+    this->declare_parameter<std::string>("path_topic", "/path");
+    this->declare_parameter<double>("smoothing_factor", 0.2);
+    this->declare_parameter<int>("iterations", 20);
+    this->declare_parameter<double>("goal_tolerance", 0.3);
+    this->declare_parameter<double>("plan_timeout_seconds", 10.0);
+
+    map_topic_ = this->get_parameter("map_topic").as_string();
+    goal_topic_ = this->get_parameter("goal_topic").as_string();
+    odom_topic_ = this->get_parameter("odom_topic").as_string();
+    path_topic_ = this->get_parameter("path_topic").as_string();
+    smoothing_factor_ = this->get_parameter("smoothing_factor").as_double();
+    iterations_ = this->get_parameter("iterations").as_int();
+    goal_tolerance_ = this->get_parameter("goal_tolerance").as_double();
+    plan_timeout_ = this->get_parameter("plan_timeout_seconds").as_double();
 }
 
 void PlannerNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
-    current_map_ = *msg;
-    if (state_ == State::WAITING_FOR_ROBOT_TO_REACH_GOAL) {
-        planPath();
+    {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        map_ = msg;
     }
-}
 
-void PlannerNode::goalCallback(const geometry_msgs::msg::PointStamped::SharedPtr msg) {
-    goal_ = *msg;
-    goal_received_ = true;
-    state_ = State::WAITING_FOR_ROBOT_TO_REACH_GOAL;
-    planPath();
-}
-
-void PlannerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-    robot_pose_ = msg->pose.pose;
-}
-
-void PlannerNode::timerCallback() {
-    if (state_ == State::WAITING_FOR_ROBOT_TO_REACH_GOAL) {
-        if (goalReached()) {
-            RCLCPP_INFO(this->get_logger(), "Goal reached!");
-            state_ = State::WAITING_FOR_GOAL;
-        } else {
-            RCLCPP_INFO(this->get_logger(), "Replanning due to timeout or progress...");
-            planPath();
+    if (active_goal_) {
+        double elapsed = (this->now() - plan_start_time_).seconds();
+        if (elapsed <= plan_timeout_) {
+            RCLCPP_INFO(this->get_logger(), 
+                        "Map updated => Replanning for current goal (time elapsed: %.2f).",
+                        elapsed);
+            publishPath();
         }
     }
 }
 
-bool PlannerNode::goalReached() {
-    double dx = goal_.point.x - robot_pose_.position.x;
-    double dy = goal_.point.y - robot_pose_.position.y;
-    return std::sqrt(dx * dx + dy * dy) < 0.5;
-}
-
-void PlannerNode::planPath() {
-    if (!goal_received_ || current_map_.data.empty()) {
-        RCLCPP_WARN(this->get_logger(), "Cannot plan path: Missing map or goal!");
+void PlannerNode::goalCallback(const geometry_msgs::msg::PointStamped::SharedPtr goal_msg) {
+    if (active_goal_) {
+        RCLCPP_WARN(this->get_logger(), "Ignoring new goal; a goal is already active.");
         return;
     }
 
-    nav_msgs::msg::Path path;
-    path.header.stamp = this->get_clock()->now();
-    path.header.frame_id = "map";
+    if (!map_) {
+        RCLCPP_WARN(this->get_logger(), "No map available yet. Cannot set goal.");
+        return;
+    }
 
-    // A* implementation
-    std::priority_queue<AStarNode, std::vector<AStarNode>, CompareF> open_list;
-    std::unordered_map<CellIndex, double, CellIndexHash> g_score;
-    std::unordered_map<CellIndex, CellIndex, CellIndexHash> came_from;
+    current_goal_ = *goal_msg;
+    active_goal_ = true;
+    plan_start_time_ = this->now();
 
-    CellIndex start = worldToGrid(robot_pose_.position.x, robot_pose_.position.y);
-    CellIndex goal = worldToGrid(goal_.point.x, goal_.point.y);
+    RCLCPP_INFO(this->get_logger(), "Received new goal: (%.2f, %.2f)",
+                goal_msg->point.x, goal_msg->point.y);
 
-    open_list.emplace(start, 0.0);
-    g_score[start] = 0.0;
+    publishPath();
+}
 
-    while (!open_list.empty()) {
-        AStarNode current = open_list.top();
-        open_list.pop();
+void PlannerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom_msg) {
+    odom_x_ = odom_msg->pose.pose.position.x;
+    odom_y_ = odom_msg->pose.pose.position.y;
+    have_odom_ = true;
+}
 
-        if (current.index == goal) {
-            reconstructPath(path, came_from, current.index);
-            path_pub_->publish(path);
+void PlannerNode::timerCallback() {
+    if (!active_goal_) {
+        return;
+    }
+
+    double elapsed = (this->now() - plan_start_time_).seconds();
+    if (elapsed > plan_timeout_) {
+        RCLCPP_WARN(this->get_logger(), "Plan timed out after %.2f seconds. Resetting goal.", elapsed);
+        resetGoal();
+        return;
+    }
+
+    double distance = std::sqrt(std::pow(odom_x_ - current_goal_.point.x, 2) +
+                                std::pow(odom_y_ - current_goal_.point.y, 2));
+    if (distance < goal_tolerance_) {
+        RCLCPP_INFO(this->get_logger(), "Goal reached! Elapsed Time: %.2f", elapsed);
+        resetGoal();
+    }
+}
+
+void PlannerNode::publishPath() {
+    if (!have_odom_) {
+        RCLCPP_WARN(this->get_logger(), "No odometry received yet. Cannot plan.");
+        resetGoal();
+        return;
+    }
+
+    double start_world_x = odom_x_;
+    double start_world_y = odom_y_;
+
+    {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        if (!planner_.planPath(start_world_x, start_world_y, current_goal_.point.x, current_goal_.point.y, map_)) {
+            RCLCPP_ERROR(this->get_logger(), "Plan failed.");
+            resetGoal();
             return;
         }
-
-        for (const auto& neighbor : getNeighbors(current.index)) {
-            double tentative_g_score = g_score[current.index] + distance(current.index, neighbor);
-
-            if (g_score.find(neighbor) == g_score.end() || tentative_g_score < g_score[neighbor]) {
-                g_score[neighbor] = tentative_g_score;
-                double f_score = tentative_g_score + heuristic(neighbor, goal);
-                open_list.emplace(neighbor, f_score);
-                came_from[neighbor] = current.index;
-            }
-        }
     }
 
-    RCLCPP_WARN(this->get_logger(), "Failed to find a path!");
+    nav_msgs::msg::Path path_msg = *planner_.getPath();
+    path_msg.header.stamp = this->now();
+    path_msg.header.frame_id = map_->header.frame_id;
+
+    path_pub_->publish(path_msg);
 }
 
-std::vector<CellIndex> PlannerNode::getNeighbors(const CellIndex& index) {
-    std::vector<CellIndex> neighbors;
-    for (int dx = -1; dx <= 1; ++dx) {
-        for (int dy = -1; dy <= 1; ++dy) {
-            if (dx == 0 && dy == 0) continue;
-            CellIndex neighbor(index.x + dx, index.y + dy);
-            if (isValidCell(neighbor)) {
-                neighbors.push_back(neighbor);
-            }
-        }
+void PlannerNode::resetGoal() {
+    active_goal_ = false;
+    RCLCPP_INFO(this->get_logger(), "Resetting active goal.");
+
+    nav_msgs::msg::Path empty_path;
+    empty_path.header.stamp = this->now();
+
+    {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        empty_path.header.frame_id = map_ ? map_->header.frame_id : "sim_world";
     }
-    return neighbors;
-}
 
-bool PlannerNode::isValidCell(const CellIndex& index) {
-    int idx = index.y * current_map_.info.width + index.x;
-    return idx >= 0 && idx < static_cast<int>(current_map_.data.size()) &&
-           current_map_.data[idx] == 0;
-}
+    path_pub_->publish(empty_path);
 
-double PlannerNode::heuristic(const CellIndex& a, const CellIndex& b) {
-    return std::sqrt(std::pow(a.x - b.x, 2) + std::pow(a.y - b.y, 2));
-}
-
-double PlannerNode::distance(const CellIndex& a, const CellIndex& b) {
-    return std::sqrt(std::pow(a.x - b.x, 2) + std::pow(a.y - b.y, 2));
-}
-
-CellIndex PlannerNode::worldToGrid(double x, double y) {
-    int grid_x = static_cast<int>((x - current_map_.info.origin.position.x) / current_map_.info.resolution);
-    int grid_y = static_cast<int>((y - current_map_.info.origin.position.y) / current_map_.info.resolution);
-    return CellIndex(grid_x, grid_y);
-}
-
-void PlannerNode::reconstructPath(nav_msgs::msg::Path& path, const std::unordered_map<CellIndex, CellIndex, CellIndexHash>& came_from, const CellIndex& current) {
-    CellIndex temp = current;
-    while (came_from.find(temp) != came_from.end()) {
-        geometry_msgs::msg::PoseStamped pose;
-        pose.pose.position.x = temp.x * current_map_.info.resolution + current_map_.info.origin.position.x;
-        pose.pose.position.y = temp.y * current_map_.info.resolution + current_map_.info.origin.position.y;
-        path.poses.push_back(pose);
-        temp = came_from.at(temp);
-    }
-    std::reverse(path.poses.begin(), path.poses.end());
+    RCLCPP_INFO(this->get_logger(), "Published empty path to stop the robot.");
 }
 
 int main(int argc, char** argv) {

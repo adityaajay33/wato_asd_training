@@ -1,7 +1,7 @@
 #include "control_node.hpp"
 
-ControlNode::ControlNode() : Node("control_node"),
-    controller_(1.0, 0.1, 0.5) {
+ControlNode::ControlNode()
+    : Node("control_node"), controller_(1.0, 0.1, 0.5) {
     path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
         "/path", 10, std::bind(&ControlNode::pathCallback, this, std::placeholders::_1));
 
@@ -25,6 +25,7 @@ void ControlNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
 
 void ControlNode::timerCallback() {
     if (!path_received_ || current_path_.poses.empty()) {
+        RCLCPP_WARN(this->get_logger(), "Path not received or empty. Skipping control update.");
         return;
     }
 
@@ -32,6 +33,8 @@ void ControlNode::timerCallback() {
     if (lookahead_point) {
         auto cmd_vel = controller_.computeVelocity(*lookahead_point, robot_pose_);
         cmd_vel_pub_->publish(cmd_vel);
+    } else {
+        RCLCPP_WARN(this->get_logger(), "No valid lookahead point found.");
     }
 }
 
