@@ -2,6 +2,7 @@
 #include <memory>
  
 #include "costmap_node.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
  
 CostmapNode::CostmapNode() : Node("costmap"), costmap_(robot::CostmapCore(this->get_logger())) {
   // Initialize the constructs and their parameters
@@ -15,11 +16,18 @@ CostmapNode::CostmapNode() : Node("costmap"), costmap_(robot::CostmapCore(this->
 }
  
 // Define the timer to publish a message every 500ms
-void CostmapNode::publishMessage() {
-  auto message = std_msgs::msg::String();
-  message.data = "Hello, ROS 2!";
-  RCLCPP_INFO(this->get_logger(), "Publishing: '%s'", message.data.c_str());
-  string_pub_->publish(message);
+void CostmapNode::publishCostmap() {
+  auto msg = nav_msgs::msg::OccupancyGrid();
+  msg.header.stamp = this->now();
+  msg.header.frame_id = "map";
+
+  costmap_.fillOccupancyGrid(msg);
+  costmap_pub_->publish(msg);
+}
+
+void CostmapNode::laserCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg){ 
+
+  costmap_.updateFromLaserScan(msg);
 }
  
 int main(int argc, char ** argv)
