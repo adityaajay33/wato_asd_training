@@ -1,50 +1,52 @@
-#include <memory>
 #include "costmap_node.hpp"
 
-CostmapNode::CostmapNode() : Node("costmap"), costmap_(robot::CostmapCore(this->get_logger())) {
-    initializeSettings();
+CostmapNode::CostmapNode()
+    : Node("costmap_node"), costmap_(robot::CostmapCore(this->get_logger())) {
+    loadParameters();
 
-    laser_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-        laser_input_topic_, rclcpp::QoS(10),
-        std::bind(&CostmapNode::processLaserData, this, std::placeholders::_1));
+    laser_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+        laser_topic_, 10, std::bind(&CostmapNode::laserCallback, this, std::placeholders::_1));
 
-    grid_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(grid_output_topic_, rclcpp::QoS(10));
+    costmap_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(costmap_topic_, 10);
 
-    costmap_.initializeCostmap(grid_resolution_, grid_width_, grid_height_, grid_origin_);
+    costmap_.initialize(resolution_, width_, height_, origin_, inflation_radius_);
+
+    RCLCPP_INFO(this->get_logger(), "CostmapNode initialized.");
 }
 
-void CostmapNode::initializeSettings() {
-    laser_input_topic_ = retrieveParameter<std::string>("laser.input_topic", "/scan");
-    grid_output_topic_ = retrieveParameter<std::string>("grid.output_topic", "/grid_map");
-    grid_resolution_ = retrieveParameter<double>("grid.resolution", 0.05);
-    grid_width_ = retrieveParameter<int>("grid.dimensions.width", 150);
-    grid_height_ = retrieveParameter<int>("grid.dimensions.height", 150);
-    grid_origin_.position.x = retrieveParameter<double>("grid.origin.x", -7.5);
-    grid_origin_.position.y = retrieveParameter<double>("grid.origin.y", -7.5);
-    grid_origin_.orientation.w = retrieveParameter<double>("grid.origin.orientation", 1.0);
-    obstacle_expansion_radius_ = retrieveParameter<double>("grid.expansion.radius", 0.75);
+void CostmapNode::loadParameters() {
+    this->declare_parameter<std::string>("laser_topic", "/scan");
+    this->declare_parameter<std::string>("costmap_topic", "/costmap");
+    this->declare_parameter<double>("resolution", 0.1);
+    this->declare_parameter<int>("width", 100);
+    this->declare_parameter<int>("height", 100);
+    this->declare_parameter<double>("origin_x", -5.0);
+    this->declare_parameter<double>("origin_y", -5.0);
+    this->declare_parameter<double>("origin_orientation_w", 1.0);
+    this->declare_parameter<double>("inflation_radius", 1.0);
+
+    laser_topic_ = this->get_parameter("laser_topic").as_string();
+    costmap_topic_ = this->get_parameter("costmap_topic").as_string();
+    resolution_ = this->get_parameter("resolution").as_double();
+    width_ = this->get_parameter("width").as_int();
+    height_ = this->get_parameter("height").as_int();
+    origin_.position.x = this->get_parameter("origin_x").as_double();
+    origin_.position.y = this->get_parameter("origin_y").as_double();
+    origin_.orientation.w = this->get_parameter("origin_orientation_w").as_double();
+    inflation_radius_ = this->get_parameter("inflation_radius").as_double();
 }
 
-template <typename T>
-T CostmapNode::retrieveParameter(const std::string &key, const T &default_value) {
-    this->declare_parameter<T>(key, default_value);
-    return this->get_parameter(key).template get_value<T>();
+void CostmapNode::laserCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan) {
+    costmap_.updateFromLaserScan(scan);
+
+    auto costmap_message = costmap_.getCostmap();
+    costmap_message->header.stamp = this->now();
+    costmap_message->header.frame_id = "map";
+
+    costmap_pub_->publish(*costmap_message);
 }
 
-void CostmapNode::processLaserData(const sensor_msgs::msg::LaserScan::SharedPtr laser_scan) {
-    if (laser_scan->ranges.empty()) {
-        RCLCPP_WARN(this->get_logger(), "Empty LaserScan received, no update performed.");
-        return;
-    }
-    costmap_.updateFromLaserScan(laser_scan);
-
-    auto grid_message = costmap_.getCostmap();
-    grid_message->header.stamp = this->now();
-    grid_message->header.frame_id = "map";
-    grid_publisher_->publish(*grid_message);
-}
-
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     rclcpp::spin(std::make_shared<CostmapNode>());
     rclcpp::shutdown();
