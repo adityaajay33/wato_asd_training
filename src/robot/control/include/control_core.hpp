@@ -5,26 +5,34 @@
 #include "nav_msgs/msg/path.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 
-namespace robot {
+namespace robot_control {
 
 class ControlCore {
 public:
-    ControlCore(const rclcpp::Logger& logger, double lookahead_distance, double goal_tolerance, double linear_velocity);
+    explicit ControlCore(const rclcpp::Logger& logger);
 
-    void updatePath(const nav_msgs::msg::Path& path);
+    void initialize(double lookahead_dist, double max_steering_angle, double steering_gain, double base_velocity);
 
-    unsigned int findLookaheadPoint(const nav_msgs::msg::Path& path, const geometry_msgs::msg::Point& robot_position) const;
+    void updatePath(const nav_msgs::msg::Path& new_path);
 
-    geometry_msgs::msg::Twist computeVelocity(const geometry_msgs::msg::PoseStamped& target, const geometry_msgs::msg::Point& robot_position, double robot_orientation) const;
+    bool hasPath() const;
+
+    geometry_msgs::msg::Twist calculateVelocityCommand(const geometry_msgs::msg::Point& position, double orientation) const;
 
 private:
-    nav_msgs::msg::Path path_;
+    int findTargetPointIndex(const geometry_msgs::msg::Point& position, double orientation) const;
+
+    double adjustAngle(double angle) const;
+
     rclcpp::Logger logger_;
+    nav_msgs::msg::Path path_;
+
     double lookahead_distance_;
-    double goal_tolerance_;
-    double linear_velocity_;
+    double max_steering_angle_;
+    double steering_gain_;
+    double base_velocity_;
 };
 
-}  // namespace robot
+} // namespace robot_control
 
-#endif  // CONTROL_CORE_HPP_
+#endif // CONTROL_CORE_HPP_

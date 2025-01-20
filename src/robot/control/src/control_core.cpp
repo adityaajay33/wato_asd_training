@@ -2,57 +2,81 @@
 #include <cmath>
 #include <algorithm>
 
-namespace robot {
+namespace robot_control {
 
-ControlCore::ControlCore(const rclcpp::Logger& logger, double lookahead_distance, double goal_tolerance, double linear_velocity)
-    : logger_(logger), lookahead_distance_(lookahead_distance), goal_tolerance_(goal_tolerance), linear_velocity_(linear_velocity) {}
+ControlCore::ControlCore(const rclcpp::Logger& logger)
+    : logger_(logger), path_() {}
 
-void ControlCore::updatePath(const nav_msgs::msg::Path& path) {
-    RCLCPP_INFO(logger_, "Path updated with %zu poses.", path.poses.size());
-    path_ = path;
+void ControlCore::initialize(double lookahead_dist, double max_steering_angle, double steering_gain, double base_velocity) {
+    lookahead_distance_ = lookahead_dist;
+    max_steering_angle_ = max_steering_angle;
+    steering_gain_ = steering_gain;
+    base_velocity_ = base_velocity;
 }
 
-unsigned int ControlCore::findLookaheadPoint(const nav_msgs::msg::Path& path, const geometry_msgs::msg::Point& robot_position) const {
-    double min_distance = std::numeric_limits<double>::max();
-    int lookahead_index = -1;
+void ControlCore::updatePath(const nav_msgs::msg::Path& new_path) {
+    RCLCPP_INFO(logger_, "Path updated with %zu points.", new_path.poses.size());
+    path_ = new_path;
+}
 
-    for (size_t i = 0; i < path.poses.size(); ++i) {
-        double dx = path.poses[i].pose.position.x - robot_position.x;
-        double dy = path.poses[i].pose.position.y - robot_position.y;
+bool ControlCore::hasPath() const {
+    return !path_.poses.empty();
+}
+
+geometry_msgs::msg::Twist ControlCore::calculateVelocityCommand(const geometry_msgs::msg::Point& position, double orientation) const {
+    geometry_msgs::msg::Twist cmd;
+
+    int target_index = findTargetPointIndex(position, orientation);
+    if (target_index == -1) {
+        RCLCPP_WARN(logger_, "No valid target point found. Stopping robot.");
+        return cmd;
+    }
+
+    const auto& target_point = path_.poses[target_index].pose.position;
+
+    double dx = target_point.x - position.x;
+    double dy = target_point.y - position.y;
+
+    double target_angle = std::atan2(dy, dx);
+    double angle_diff = adjustAngle(target_angle - orientation);
+
+    if (std::abs(angle_diff) > max_steering_angle_) {
+        cmd.linear.x = 0.0;
+    } else {
+        cmd.linear.x = base_velocity_;
+    }
+
+    cmd.angular.z = angle_diff * steering_gain_;
+    return cmd;
+}
+
+int ControlCore::findTargetPointIndex(const geometry_msgs::msg::Point& position, double orientation) const {
+    double min_distance = std::numeric_limits<double>::max();
+    int closest_index = -1;
+
+    for (size_t i = 0; i < path_.poses.size(); ++i) {
+        double dx = path_.poses[i].pose.position.x - position.x;
+        double dy = path_.poses[i].pose.position.y - position.y;
+
         double distance = std::hypot(dx, dy);
 
         if (distance >= lookahead_distance_ && distance < min_distance) {
             min_distance = distance;
-            lookahead_index = i;
+            closest_index = static_cast<int>(i);
         }
     }
 
-    if (lookahead_index == -1) {
-        RCLCPP_WARN(logger_, "No valid lookahead point found.");
+    if (closest_index == -1) {
+        RCLCPP_WARN(logger_, "No target point found within lookahead distance.");
     }
 
-    return lookahead_index;
+    return closest_index;
 }
 
-geometry_msgs::msg::Twist ControlCore::computeVelocity(const geometry_msgs::msg::PoseStamped& target, const geometry_msgs::msg::Point& robot_position, double robot_orientation) const {
-    geometry_msgs::msg::Twist cmd_vel;
-
-    double target_angle = std::atan2(target.pose.position.y - robot_position.y, target.pose.position.x - robot_position.x);
-    double angle_error = target_angle - robot_orientation;
-
-    while (angle_error > M_PI) angle_error -= 2 * M_PI;
-    while (angle_error < -M_PI) angle_error += 2 * M_PI;
-
-    if (std::hypot(target.pose.position.x - robot_position.x, target.pose.position.y - robot_position.y) <= goal_tolerance_) {
-        RCLCPP_INFO(logger_, "Goal reached. Stopping the robot.");
-        cmd_vel.linear.x = 0.0;
-        cmd_vel.angular.z = 0.0;
-    } else {
-        cmd_vel.linear.x = linear_velocity_;
-        cmd_vel.angular.z = angle_error;
-    }
-
-    return cmd_vel;
+double ControlCore::adjustAngle(double angle) const {
+    while (angle > M_PI) angle -= 2.0 * M_PI;
+    while (angle < -M_PI) angle += 2.0 * M_PI;
+    return angle;
 }
 
-}  // namespace robot
+} // namespace robot_control
