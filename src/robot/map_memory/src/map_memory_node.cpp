@@ -1,10 +1,12 @@
 #include "map_memory_node.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Matrix3x3.h"
+#include <algorithm>
+#include <limits>
 
 MapMemoryNode::MapMemoryNode() 
     : Node("map_memory_node"), 
-      map_memory_(robot::MapMemoryCore(this->get_logger())), 
+      map_memory_(robot::MapMemoryCore(this->get_logger())),
       last_robot_x_(std::numeric_limits<double>::quiet_NaN()), 
       last_robot_y_(std::numeric_limits<double>::quiet_NaN()) {
     

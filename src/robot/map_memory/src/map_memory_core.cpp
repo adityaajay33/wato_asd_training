@@ -3,56 +3,50 @@
 namespace robot {
 
 MapMemoryCore::MapMemoryCore(const rclcpp::Logger& logger)
-    : logger_(logger), global_map_(std::make_shared<nav_msgs::msg::OccupancyGrid>()) {}
+    : global_map_(std::make_shared<nav_msgs::msg::OccupancyGrid>()), logger_(logger) {}
 
 void MapMemoryCore::initializeGlobalMap(double resolution, int width, int height, const geometry_msgs::msg::Pose& origin) {
+    resolution_ = resolution;
+    width_ = width;
+    height_ = height;
+
     global_map_->info.resolution = resolution;
     global_map_->info.width = width;
     global_map_->info.height = height;
     global_map_->info.origin = origin;
-    global_map_->data.assign(width * height, -1);
+
+    global_map_->data.resize(width * height, -1); // Initialize cells as unknown (-1)
 }
 
 void MapMemoryCore::mergeCostmap(const nav_msgs::msg::OccupancyGrid& costmap, double robot_x, double robot_y, double robot_theta) {
-    double local_res = costmap.info.resolution;
-    double local_origin_x = costmap.info.origin.position.x;
-    double local_origin_y = costmap.info.origin.position.y;
+    if (!global_map_) {
+        RCLCPP_ERROR(logger_, "Global map is not initialized.");
+        return;
+    }
 
-    for (int y = 0; y < costmap.info.height; ++y) {
-        for (int x = 0; x < costmap.info.width; ++x) {
-            int costmap_index = y * costmap.info.width + x;
-            int8_t cost = costmap.data[costmap_index];
-            if (cost == -1) continue;
+    for (unsigned int y = 0; y < costmap.info.height; ++y) {
+        for (unsigned int x = 0; x < costmap.info.width; ++x) {
+            int costmap_idx = y * costmap.info.width + x;
 
-            double lx = local_origin_x + (x + 0.5) * local_res;
-            double ly = local_origin_y + (y + 0.5) * local_res;
+            // Compute global map indices based on robot position
+            int mx = static_cast<int>(robot_x + x);
+            int my = static_cast<int>(robot_y + y);
 
-            double cos_t = std::cos(robot_theta);
-            double sin_t = std::sin(robot_theta);
-            double wx = robot_x + lx * cos_t - ly * sin_t;
-            double wy = robot_y + lx * sin_t + ly * cos_t;
-
-            int gx, gy;
-            if (!robotToMap(wx, wy, gx, gy)) continue;
-
-            int global_index = gy * global_map_->info.width + gx;
-            int current_global_cost = (global_map_->data[global_index] < 0) ? 0 : global_map_->data[global_index];
-            global_map_->data[global_index] = std::max(current_global_cost, static_cast<int>(cost));
+            if (mx >= 0 && mx < width_ && my >= 0 && my < height_) {
+                int global_idx = my * width_ + mx;
+                global_map_->data[global_idx] = costmap.data[costmap_idx];
+            }
         }
     }
 }
 
 bool MapMemoryCore::robotToMap(double rx, double ry, int& mx, int& my) const {
-    double origin_x = global_map_->info.origin.position.x;
-    double origin_y = global_map_->info.origin.position.y;
-    double resolution = global_map_->info.resolution;
+    if (!global_map_) return false;
 
-    if (rx < origin_x || ry < origin_y) return false;
+    mx = static_cast<int>((rx - global_map_->info.origin.position.x) / resolution_);
+    my = static_cast<int>((ry - global_map_->info.origin.position.y) / resolution_);
 
-    mx = static_cast<int>((rx - origin_x) / resolution);
-    my = static_cast<int>((ry - origin_y) / resolution);
-
-    return mx >= 0 && mx < global_map_->info.width && my >= 0 && my < global_map_->info.height;
+    return mx >= 0 && mx < width_ && my >= 0 && my < height_;
 }
 
 nav_msgs::msg::OccupancyGrid::SharedPtr MapMemoryCore::getGlobalMap() const {

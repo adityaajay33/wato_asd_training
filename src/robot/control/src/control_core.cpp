@@ -1,59 +1,112 @@
 #include "control_core.hpp"
+#include <cmath> // Added to ensure mathematical operations are included
 
 namespace robot {
 
-PurePursuitCore::PurePursuitCore(double lookahead_distance, double goal_tolerance, double linear_speed)
-    : lookahead_distance_(lookahead_distance),
-      goal_tolerance_(goal_tolerance),
-      linear_speed_(linear_speed) {}
+ControlCore::ControlCore(const rclcpp::Logger& logger) 
+    : logger_(logger), path_(nav_msgs::msg::Path()) {}
 
-std::optional<geometry_msgs::msg::PoseStamped> PurePursuitCore::findLookaheadPoint(
-    const nav_msgs::msg::Path &path, const geometry_msgs::msg::Pose &robot_pose) {
+void ControlCore::initControlCore(
+    double lookahead_distance,
+    double max_steering_angle,
+    double steering_gain,
+    double linear_velocity) {
+    lookahead_distance_ = lookahead_distance;
+    max_steering_angle_ = max_steering_angle;
+    steering_gain_ = steering_gain;
+    linear_velocity_ = linear_velocity;
+}
 
-    for (const auto &pose : path.poses) {
-        double distance = computeDistance(robot_pose.position, pose.pose.position);
-        if (distance >= lookahead_distance_) {
-            return pose;
+void ControlCore::updatePath(nav_msgs::msg::Path path) {
+    RCLCPP_INFO(logger_, "Path Updated");
+    path_ = path;
+}
+
+bool ControlCore::isPathEmpty() {
+    return path_.poses.empty();
+}
+
+geometry_msgs::msg::Twist ControlCore::calculateControlCommand(double robot_x, double robot_y, double robot_theta) {
+    geometry_msgs::msg::Twist twist;
+
+    unsigned int lookahead_index = findLookaheadPoint(robot_x, robot_y, robot_theta);
+
+    if (lookahead_index >= path_.poses.size()) {
+        return twist; // Return zero-twist if no valid lookahead point
+    }
+
+    double lookahead_x = path_.poses[lookahead_index].pose.position.x;
+    double lookahead_y = path_.poses[lookahead_index].pose.position.y;
+
+    double dx = lookahead_x - robot_x;
+    double dy = lookahead_y - robot_y;
+
+    double angle_to_lookahead = std::atan2(dy, dx);
+    double steering_angle = angle_to_lookahead - robot_theta;
+
+    if (steering_angle > M_PI) {
+        steering_angle -= 2 * M_PI;
+    } else if (steering_angle < -M_PI) {
+        steering_angle += 2 * M_PI;
+    }
+
+    if (std::abs(steering_angle) > std::abs(max_steering_angle_)) {
+        twist.linear.x = 0;
+    } else {
+        twist.linear.x = linear_velocity_;
+    }
+
+    steering_angle = std::max(-max_steering_angle_, std::min(steering_angle, max_steering_angle_));
+    twist.angular.z = steering_angle * steering_gain_;
+
+    return twist;
+}
+
+unsigned int ControlCore::findLookaheadPoint(double robot_x, double robot_y, double robot_theta) {
+    double min_distance = std::numeric_limits<double>::max();
+    int lookahead_index = 0;
+    bool found_forward = false;
+
+    for (size_t i = 0; i < path_.poses.size(); ++i) {
+        double dx = path_.poses[i].pose.position.x - robot_x;
+        double dy = path_.poses[i].pose.position.y - robot_y;
+        double distance = std::sqrt(dx * dx + dy * dy);
+
+        if (distance < lookahead_distance_)
+            continue;
+
+        double angle_to_point = std::atan2(dy, dx);
+        double angle_diff = angle_to_point - robot_theta;
+
+        if (angle_diff > M_PI) angle_diff -= 2 * M_PI;
+        if (angle_diff < -M_PI) angle_diff += 2 * M_PI;
+
+        if (std::abs(angle_diff) < M_PI / 2) {
+            if (distance < min_distance) {
+                min_distance = distance;
+                lookahead_index = i;
+                found_forward = true;
+            }
         }
     }
 
-    return std::nullopt;
-}
+    if (!found_forward) {
+        for (size_t i = 0; i < path_.poses.size(); ++i) {
+            double dx = path_.poses[i].pose.position.x - robot_x;
+            double dy = path_.poses[i].pose.position.y - robot_y;
+            double distance = std::sqrt(dx * dx + dy * dy);
 
-geometry_msgs::msg::Twist PurePursuitCore::computeVelocity(
-    const geometry_msgs::msg::PoseStamped &target, const geometry_msgs::msg::Pose &robot_pose) {
+            if (distance < lookahead_distance_)
+                continue;
 
-    geometry_msgs::msg::Twist cmd_vel;
-
-    double robot_yaw = extractYaw(robot_pose.orientation);
-
-    double dx = target.pose.position.x - robot_pose.position.x;
-    double dy = target.pose.position.y - robot_pose.position.y;
-
-    double target_angle = std::atan2(dy, dx);
-    double angle_error = target_angle - robot_yaw;
-
-    while (angle_error > M_PI) {
-        angle_error -= 2.0 * M_PI;
-    }
-    while (angle_error < -M_PI) {
-        angle_error += 2.0 * M_PI;
+            if (distance < min_distance) {
+                min_distance = distance;
+                lookahead_index = i;
+            }
+        }
     }
 
-    cmd_vel.linear.x = linear_speed_;
-    cmd_vel.angular.z = 2.0 * angle_error;
-
-    return cmd_vel;
-}
-
-double PurePursuitCore::computeDistance(const geometry_msgs::msg::Point &a, const geometry_msgs::msg::Point &b) {
-    return std::sqrt(std::pow(b.x - a.x, 2) + std::pow(b.y - a.y, 2));
-}
-
-double PurePursuitCore::extractYaw(const geometry_msgs::msg::Quaternion &quat) {
-    double siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y);
-    double cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z);
-    return std::atan2(siny_cosp, cosy_cosp);
+    return lookahead_index;
 }
 
 } // namespace robot

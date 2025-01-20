@@ -8,23 +8,28 @@
 #include "costmap_core.hpp"
 
 class CostmapNode : public rclcpp::Node {
-  public:
+public:
     CostmapNode();
 
-    void laserScanCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan);
-
-  private:
+private:
     robot::CostmapCore costmap_;
 
-    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_publisher_;
-    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_scan_subscription_;
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_publisher_;
+    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_subscriber_;
 
-    void initializeParameters();
-    double resolution_;
-    int width_;
-    int height_;
-    geometry_msgs::msg::Pose origin_;
-    double inflation_radius_;
+    std::string laser_input_topic_;
+    std::string grid_output_topic_;
+    double grid_resolution_;
+    int grid_width_;
+    int grid_height_;
+    geometry_msgs::msg::Pose grid_origin_;
+    double obstacle_expansion_radius_;
+
+    void initializeSettings();
+    void processLaserData(const sensor_msgs::msg::LaserScan::SharedPtr laser_scan);
+
+    template <typename T>
+    T retrieveParameter(const std::string &key, const T &default_value);
 };
 
 #endif
